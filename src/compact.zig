@@ -75,7 +75,23 @@ pub fn repair(comptime T: type, value_ptr: T, allocator: Allocator) AllocatorErr
 
                 .Slice => {
                     const sliceElementType = @TypeOf(value_ptr.*[0]);
-                    var duplicateSlice = try allocator.dupe(sliceElementType, @as([]const sliceElementType, @ptrCast(value_ptr.*)));
+
+                    var duplicateSlice = if (value_ptr.*.len > 0)
+                        try allocator.dupe(sliceElementType, @as([]const sliceElementType, @ptrCast(value_ptr.*)))
+                    else switch (@typeInfo(sliceElementType)) {
+                        // TODO This is a bit hacky as deserialised object
+                        // will have a `label: ?[]const u8 = null` set to an empty string,
+                        // annoying when stringifying to JSON
+                        // with `.emit_null_optional_fields = false` flag.
+                        // TODO There are nested structures where
+                        // TODO This will most likely fail for the slice of structs
+                        // where all fields are optional strings like the `label` above.
+                        .Int, .Float => try allocator.allocSentinel(sliceElementType, 0, @as(sliceElementType, 0)),
+                        // TODO I need to come up with better sentiel for Slices
+                        // otherwise `list: ?[]Struct = null` will casuse segmentation errors once unsealed
+                        // the only workaround is to define it as `list: []Struct = undefined`
+                        else => try allocator.dupe(sliceElementType, @as([]const sliceElementType, @ptrCast(value_ptr.*))),
+                    };
 
                     if (ComplexType(sliceElementType)) {
                         var index: usize = 0;
@@ -241,6 +257,23 @@ test "compact union with string field" {
     const dupe_ptr = try compact(*U, ptr, allocator);
     try std.testing.expect(ptr != dupe_ptr);
     try std.testing.expectEqualStrings("lorem ipsum", dupe_ptr.c);
+}
+
+test "compact struct with empty string field" {
+    const U = struct { a: ?u64 = null, b: ?u32 = null, c: []const u8 };
+    var heap_allocator = std.heap.GeneralPurposeAllocator(.{}){};
+    var allocator = heap_allocator.allocator();
+    const ptr: *U = try allocator.create(U);
+    defer allocator.destroy(ptr);
+    ptr.* = U{ .c = "" };
+
+    const dupe_ptr = try compact(*U, ptr, allocator);
+    try std.testing.expect(ptr != dupe_ptr);
+
+    const MAX_PTR_ADDRESS = try allocator.dupe(u8, "");
+    try std.testing.expect(MAX_PTR_ADDRESS.ptr != dupe_ptr.c.ptr);
+    try std.testing.expectEqual(0, dupe_ptr.c.len);
+    try std.testing.expectEqual(0, dupe_ptr.c.ptr[0]);
 }
 
 test "compact simple optional" {
