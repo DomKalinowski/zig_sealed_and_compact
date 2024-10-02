@@ -368,6 +368,27 @@ test "seal and unseal with buffer" {
     try std.testing.expectEqual(s2_ptr.*.e.?.*, new_ptr.*.e.?.*);
 }
 
+test "seal and unseal struct with empty string field with buffer" {
+    const S = struct { a: ?u64 = null, b: ?u32 = null, c: []const u8 };
+    var heap_allocator = std.heap.GeneralPurposeAllocator(.{}){};
+    var allocator = heap_allocator.allocator();
+    const ptr: *S = try allocator.create(S);
+
+    ptr.* = S{ .c = "" };
+
+    const buffer_size = 1024;
+    var buffer align(8) = [_]u8{0} ** buffer_size;
+
+    _ = try seal_into_buffer(*S, ptr, buffer[0..]);
+
+    allocator.destroy(ptr);
+
+    const new_ptr = try unseal_from_buffer(*S, buffer[0..], allocator);
+
+    try std.testing.expect(ptr != new_ptr);
+    try std.testing.expectEqualStrings("", new_ptr.c);
+}
+
 test "seal and unseal union with string field with buffer" {
     const U = union(enum) { a: u64, b: []const u8, c: u32 };
 
